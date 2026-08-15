@@ -16,16 +16,19 @@
   button { padding: 10px 18px; border: none; border-radius: 6px; background: #4a9eff; color: #fff; cursor: pointer; font-size: 14px; }
   button:hover { background: #3584dd; }
   .btn-danger { background: #e05d5d; }
+  .btn-danger:hover { background: #c44545; }
   #result { margin-top: 12px; padding: 12px; border-radius: 8px; font-size: 16px; display: none; }
   .ok { background: #1e4620; color: #7ee787; display: block !important; }
   .no { background: #5a1e1e; color: #ff9494; display: block !important; }
   table { width: 100%; border-collapse: collapse; font-size: 14px; }
   th, td { padding: 8px; text-align: left; border-bottom: 1px solid #3a4a6b; }
   th { color: #9db8e8; }
-  .stats { display: flex; gap: 20px; }
+  .stats { display: flex; gap: 20px; flex-wrap: wrap; }
   .stat-item { background: #1a2233; padding: 12px 20px; border-radius: 8px; }
   .stat-num { font-size: 24px; font-weight: bold; color: #4a9eff; }
   .member-item { padding: 8px; border-bottom: 1px dashed #3a4a6b; display: flex; justify-content: space-between; align-items: center; }
+  .form-row { display: flex; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; align-items: center; }
+  #addMsg { min-height: 22px; font-size: 14px; margin-bottom: 10px; }
 </style>
 </head>
 <body>
@@ -35,7 +38,7 @@
   <!-- ① 刷卡区 -->
   <div class="card">
     <h2>刷卡模拟</h2>
-    <input id="cardInput" placeholder="输入卡号，如 A001">
+    <input id="swipeCardInput" placeholder="输入卡号，如 A001" maxlength="4" style="text-transform: uppercase;">
     <select id="doorSelect">
       <option>正门</option>
       <option>侧门</option>
@@ -58,87 +61,118 @@
   <!-- ③ 成员管理 -->
   <div class="card">
     <h2>授权成员管理</h2>
-    <input id="nameInput" placeholder="姓名">
-    <input id="cardIdInput" placeholder="卡号，如 B001">
-    <button onclick="addMember()">➕ 添加成员</button>
-    <div id="memberMsg" style="margin:10px 0; color:#7ee787;"></div>
+
+    <div class="form-row">
+      <input id="nameInput" placeholder="姓名（2-10字）" maxlength="10">
+      <input id="memberCardInput" placeholder="卡号（如 B001）" maxlength="4" style="text-transform: uppercase;">
+      <button onclick="handleAdd()">➕ 添加成员</button>
+    </div>
+
+    <div id="addMsg"></div>
+
     <div id="memberList"></div>
   </div>
 
   <!-- ④ 通行记录 -->
   <div class="card">
-    <h2>实时通行记录（最近20条） <button onclick="loadLogs();loadStats();" style="float:right;">🔄 刷新</button></h2>
+    <h2>实时通行记录（最近20条）
+      <button onclick="loadLogs();loadStats();" style="float:right;">🔄 刷新</button>
+    </h2>
     <table>
-      <thead><tr><th>时间</th><th>姓名</th><th>卡号</th><th>门</th><th>方向</th><th>结果</th></tr></thead>
+      <thead>
+        <tr><th>时间</th><th>姓名</th><th>卡号</th><th>门</th><th>方向</th><th>结果</th></tr>
+      </thead>
       <tbody id="logBody"></tbody>
     </table>
   </div>
 </div>
 
 <script>
-// ========== 改成你自己的 Supabase 信息（就改这2行！）==========
+// ========== Supabase 配置 ==========
 var sb = supabase.createClient(
   'https://fbdawaqefcdpzvfzjbjl.supabase.co',
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZiZGF3YXFlZmNkcHp2ZnpqYmpsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODYzOTc3MzQsImV4cCI6MjEwMTk3MzczNH0.Q0AXYq2odvXu5ACXHRqaxDa-O8_gSiU4we33rB7sT-Q'               // ← 你的 anon public key
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZiZGF3YXFlZmNkcHp2ZnpqYmpsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODYzOTc3MzQsImV4cCI6MjEwMTk3MzczNH0.Q0AXYq2odvXu5ACXHRqaxDa-O8_gSiU4we33rB7sT-Q'
 );
-
-// ========== 刷卡开门 ==========
-async function swipe() {
-  var cardId = document.getElementById('cardInput').value.trim();
-  var door = document.getElementById('doorSelect').value;
-  var isEnter = document.getElementById('dirSelect').value === 'in';
-  var box = document.getElementById('result');
-
-  if (!cardId) { alert('请输入卡号！'); return; }
-
-  // 1. 去 members 表查这张卡授没授权
-  var mRes = await sb.from('members').select('name').eq('card_id', cardId).limit(1);
-  if (mRes.error) { alert('查询成员失败: ' + mRes.error.message); return; }
-
-  var granted = mRes.data.length > 0;
-  var personName = granted ? mRes.data[0].name : '未知卡';
-
-  // 2. 把这次通行写进 access_logs 表
-  var iRes = await sb.from('access_logs').insert([{
-    card_id: cardId, person_name: personName, door: door,
-    is_enter: isEnter, granted: granted
-  }]);
-  if (iRes.error) { alert('写入记录失败: ' + iRes.error.message); return; }
-
-  // 3. 显示开门结果
-  if (granted) {
-    box.className = 'ok';
-    box.innerHTML = '✅ ' + personName + '，欢迎！' + door + (isEnter ? ' 进入' : ' 离开') + '已开门';
-  } else {
-    box.className = 'no';
-    box.innerHTML = '❌ 卡号 ' + cardId + ' 未授权，禁止通行！';
-  }
-
-  document.getElementById('cardInput').value = '';
-  loadLogs();
-  loadStats();
+// 记录每张卡最后一次刷卡的时间
+var lastSwipeTime = {};
+// ========== 工具函数：显示提示 ==========
+function showMsg(text, type) {
+  var msg = document.getElementById('addMsg');
+  if (!msg) return;
+  msg.textContent = text;
+  msg.style.color = type === 'success' ? '#4ade80' : '#f87171';
+  setTimeout(function() { msg.textContent = ''; }, 3000);
 }
 
-// ========== 添加成员 ==========
-async function addMember() {
-  var name = document.getElementById('nameInput').value.trim();
-  var cardId = document.getElementById('cardIdInput').value.trim();
-  if (!name || !cardId) { alert('姓名和卡号不能为空！'); return; }
+// ========== 校验：姓名 ==========
+function validateName(name) {
+  if (!name || name.length === 0) return '姓名不能为空';
+  if (name.length < 2) return '姓名至少 2 个字';
+  if (name.length > 10) return '姓名不能超过 10 个字';
+  if (!/^[\u4e00-\u9fa5a-zA-Z0-9]+$/.test(name)) {
+    return '姓名只能包含中文、英文、数字';
+  }
+  return null;
+}
 
-  var res = await sb.from('members').insert([{ name: name, card_id: cardId }]);
-  if (res.error) { alert('添加失败: ' + res.error.message); return; }
+// ========== 校验：卡号 ==========
+function validateCardId(cardId) {
+  if (!cardId || cardId.length === 0) return '卡号不能为空';
+  if (!/^[AB]\d{3}$/i.test(cardId)) {
+    return '卡号格式错误，应为 A001 或 B001';
+  }
+  return null;
+}
 
-  document.getElementById('memberMsg').innerHTML = '✅ 已添加：' + name + '（卡号 ' + cardId + '）';
-  document.getElementById('nameInput').value = '';
-  document.getElementById('cardIdInput').value = '';
-  loadMembers();
+// ========== 检查卡号是否已存在 ==========
+async function isCardExists(cardId) {
+  var res = await sb.from('members').select('id').eq('card_id', cardId.toUpperCase()).limit(1);
+  return res.data && res.data.length > 0;
+}
+
+// ========== 添加成员（带校验）==========
+async function handleAdd() {
+  var nameInput = document.getElementById('nameInput');
+  var cardInput = document.getElementById('memberCardInput');
+
+  var name = nameInput.value.trim();
+  var cardId = cardInput.value.trim().toUpperCase();
+
+  var nameErr = validateName(name);
+  if (nameErr) { showMsg('❌ ' + nameErr, 'error'); nameInput.focus(); return; }
+
+  var cardErr = validateCardId(cardId);
+  if (cardErr) { showMsg('❌ ' + cardErr, 'error'); cardInput.focus(); return; }
+
+  if (await isCardExists(cardId)) {
+    showMsg('❌ 卡号 ' + cardId + ' 已被使用', 'error');
+    cardInput.focus();
+    return;
+  }
+
+  var res = await sb.from('members').insert({ name: name, card_id: cardId });
+  if (res.error) {
+    showMsg('❌ 添加失败: ' + res.error.message, 'error');
+  } else {
+    showMsg('✅ 已添加：' + name + '（卡号 ' + cardId + '）', 'success');
+    nameInput.value = '';
+    cardInput.value = '';
+    nameInput.focus();
+    loadMembers();
+  }
 }
 
 // ========== 删除成员 ==========
-async function delMember(id) {
-  var res = await sb.from('members').delete().eq('id', id);
-  if (res.error) { alert('删除失败: ' + res.error.message); return; }
-  loadMembers();
+async function deleteMember(id) {
+  if (!confirm('确定删除这个成员？')) return;
+  var res = await sb.from('members').delete().eq('id', id).select();
+  if (res.error) {
+    alert('❌ 删除失败: ' + res.error.message);
+  } else if (!res.data || res.data.length === 0) {
+    alert('⚠️ 没删掉任何记录，可能是权限问题（去 Supabase 关闭 RLS 试试）');
+  } else {
+    loadMembers();
+  }
 }
 
 // ========== 加载成员列表 ==========
@@ -148,10 +182,66 @@ async function loadMembers() {
   var html = '';
   for (var i = 0; i < res.data.length; i++) {
     var m = res.data[i];
-    html += '<div class="member-item"><span>👤 ' + m.name + '　卡号：' + m.card_id +
-            '</span><button class="btn-danger" onclick="delMember(' + m.id + ')">删除</button></div>';
+    html += '<div class="member-item"><span>👤 ' + m.name +
+            '　卡号：' + m.card_id +
+            '</span><button class="btn-danger" onclick="deleteMember(' + m.id + ')">删除</button></div>';
   }
-  document.getElementById('memberList').innerHTML = html || '<div>暂无成员</div>';
+  document.getElementById('memberList').innerHTML = html || '<div style="color:#888;">暂无成员</div>';
+}
+
+// ========== 刷卡 ==========
+async function swipe() {
+  var cardId = document.getElementById('swipeCardInput').value.trim().toUpperCase();
+// ========== 👇 新增：防重复刷卡（5秒内同一张卡只能刷一次）==========
+  var now = Date.now();
+  if (lastSwipeTime[cardId] && (now - lastSwipeTime[cardId] < 5000)) {
+    var box = document.getElementById('result');
+    box.className = 'no';
+    var remain = Math.ceil((5000 - (now - lastSwipeTime[cardId])) / 1000);
+    box.innerHTML = '⏳ 刷卡太频繁，请 ' + remain + ' 秒后再试';
+    return;   // 直接返回，不执行后面的逻辑
+  }
+  lastSwipeTime[cardId] = now;
+  // ========== 👆 新增结束 ==========
+  var door = document.getElementById('doorSelect').value;
+  var isEnter = document.getElementById('dirSelect').value === 'in';
+  var box = document.getElementById('result');
+
+  if (!cardId) { alert('请输入卡号！'); return; }
+
+  // 校验卡号格式（防止用户输入中文等乱码）
+  if (!/^[AB]\d{3}$/i.test(cardId)) {
+    box.className = 'no';
+    box.innerHTML = '⚠️ 卡号格式不对，应为 A001 这样的格式';
+    return;
+  }
+
+  var mRes = await sb.from('members').select('name').eq('card_id', cardId).limit(1);
+  if (mRes.error) { alert('查询失败: ' + mRes.error.message); return; }
+
+  var granted = mRes.data.length > 0;
+  var personName = granted ? mRes.data[0].name : '未知卡';
+
+  var iRes = await sb.from('access_logs').insert([{
+    card_id: cardId,
+    person_name: personName,
+    door: door,
+    is_enter: isEnter,
+    granted: granted
+  }]);
+  if (iRes.error) { alert('写入失败: ' + iRes.error.message); return; }
+
+  if (granted) {
+    box.className = 'ok';
+    box.innerHTML = '✅ ' + personName + '，欢迎！' + door + (isEnter ? ' 进入' : ' 离开') + ' 已开门';
+  } else {
+    box.className = 'no';
+    box.innerHTML = '❌ 卡号 ' + cardId + ' 未授权，禁止通行！';
+  }
+
+  document.getElementById('swipeCardInput').value = '';
+  loadLogs();
+  loadStats();
 }
 
 // ========== 加载通行记录 ==========
@@ -162,11 +252,13 @@ async function loadLogs() {
   for (var i = 0; i < res.data.length; i++) {
     var l = res.data[i];
     html += '<tr><td>' + new Date(l.created_at).toLocaleString() +
-            '</td><td>' + l.person_name + '</td><td>' + l.card_id +
-            '</td><td>' + l.door + '</td><td>' + (l.is_enter ? '进入' : '离开') +
+            '</td><td>' + l.person_name +
+            '</td><td>' + l.card_id +
+            '</td><td>' + l.door +
+            '</td><td>' + (l.is_enter ? '进入' : '离开') +
             '</td><td>' + (l.granted ? '✅ 放行' : '❌ 拒绝') + '</td></tr>';
   }
-  document.getElementById('logBody').innerHTML = html || '<tr><td colspan="6">暂无记录</td></tr>';
+  document.getElementById('logBody').innerHTML = html || '<tr><td colspan="6" style="text-align:center;color:#888;">暂无记录</td></tr>';
 }
 
 // ========== 今日统计 ==========
