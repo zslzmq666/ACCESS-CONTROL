@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>智能门禁系统</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: "Microsoft YaHei", sans-serif; background: #1a2233; color: #eee; padding: 20px; }
+  h1 { text-align: center; margin: 20px 0; }
+  .wrap { max-width: 900px; margin: 0 auto; }
+  .card { background: #243049; border-radius: 12px; padding: 20px; margin-bottom: 20px; }
+  .card h2 { margin-bottom: 15px; font-size: 18px; border-left: 4px solid #4a9eff; padding-left: 10px; }
+  input, select { padding: 10px; border-radius: 6px; border: none; margin-right: 8px; margin-bottom: 8px; font-size: 14px; }
+  button { padding: 10px 18px; border: none; border-radius: 6px; background: #4a9eff; color: #fff; cursor: pointer; font-size: 14px; }
+  button:hover { background: #3584dd; }
+  .btn-danger { background: #e05d5d; }
+  #result { margin-top: 12px; padding: 12px; border-radius: 8px; font-size: 16px; display: none; }
+  .ok { background: #1e4620; color: #7ee787; display: block !important; }
+  .no { background: #5a1e1e; color: #ff9494; display: block !important; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th, td { padding: 8px; text-align: left; border-bottom: 1px solid #3a4a6b; }
+  th { color: #9db8e8; }
+  .stats { display: flex; gap: 20px; }
+  .stat-item { background: #1a2233; padding: 12px 20px; border-radius: 8px; }
+  .stat-num { font-size: 24px; font-weight: bold; color: #4a9eff; }
+  .member-item { padding: 8px; border-bottom: 1px dashed #3a4a6b; display: flex; justify-content: space-between; align-items: center; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🚪 智能门禁系统</h1>
+
+  <!-- ① 刷卡区 -->
+  <div class="card">
+    <h2>刷卡模拟</h2>
+    <input id="cardInput" placeholder="输入卡号，如 A001">
+    <select id="doorSelect">
+      <option>正门</option>
+      <option>侧门</option>
+      <option>停车场</option>
+    </select>
+    <select id="dirSelect">
+      <option value="in">进入</option>
+      <option value="out">离开</option>
+    </select>
+    <button onclick="swipe()">刷 卡</button>
+    <div id="result"></div>
+  </div>
+
+  <!-- ② 今日统计 -->
+  <div class="card">
+    <h2>今日统计</h2>
+    <div class="stats" id="stats">加载中...</div>
+  </div>
+
+  <!-- ③ 成员管理 -->
+  <div class="card">
+    <h2>授权成员管理</h2>
+    <input id="nameInput" placeholder="姓名">
+    <input id="cardIdInput" placeholder="卡号，如 B001">
+    <button onclick="addMember()">➕ 添加成员</button>
+    <div id="memberMsg" style="margin:10px 0; color:#7ee787;"></div>
+    <div id="memberList"></div>
+  </div>
+
+  <!-- ④ 通行记录 -->
+  <div class="card">
+    <h2>实时通行记录（最近20条） <button onclick="loadLogs();loadStats();" style="float:right;">🔄 刷新</button></h2>
+    <table>
+      <thead><tr><th>时间</th><th>姓名</th><th>卡号</th><th>门</th><th>方向</th><th>结果</th></tr></thead>
+      <tbody id="logBody"></tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+// ========== 改成你自己的 Supabase 信息（就改这2行！）==========
+var sb = supabase.createClient(
+  'https://fbdawaqefcdpzvfzjbjl.supabase.co/rest/v1/',   // ← 你的 URL
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZiZGF3YXFlZmNkcHp2ZnpqYmpsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODYzOTc3MzQsImV4cCI6MjEwMTk3MzczNH0.Q0AXYq2odvXu5ACXHRqaxDa-O8_gSiU4we33rB7sT-Q'               // ← 你的 anon public key
+);
+
+// ========== 刷卡开门 ==========
+async function swipe() {
+  var cardId = document.getElementById('cardInput').value.trim();
+  var door = document.getElementById('doorSelect').value;
+  var isEnter = document.getElementById('dirSelect').value === 'in';
+  var box = document.getElementById('result');
+
+  if (!cardId) { alert('请输入卡号！'); return; }
+
+  // 1. 去 members 表查这张卡授没授权
+  var mRes = await sb.from('members').select('name').eq('card_id', cardId).limit(1);
+  if (mRes.error) { alert('查询成员失败: ' + mRes.error.message); return; }
+
+  var granted = mRes.data.length > 0;
+  var personName = granted ? mRes.data[0].name : '未知卡';
+
+  // 2. 把这次通行写进 access_logs 表
+  var iRes = await sb.from('access_logs').insert([{
+    card_id: cardId, person_name: personName, door: door,
+    is_enter: isEnter, granted: granted
+  }]);
+  if (iRes.error) { alert('写入记录失败: ' + iRes.error.message); return; }
+
+  // 3. 显示开门结果
+  if (granted) {
+    box.className = 'ok';
+    box.innerHTML = '✅ ' + personName + '，欢迎！' + door + (isEnter ? ' 进入' : ' 离开') + '已开门';
+  } else {
+    box.className = 'no';
+    box.innerHTML = '❌ 卡号 ' + cardId + ' 未授权，禁止通行！';
+  }
+
+  document.getElementById('cardInput').value = '';
+  loadLogs();
+  loadStats();
+}
+
+// ========== 添加成员 ==========
+async function addMember() {
+  var name = document.getElementById('nameInput').value.trim();
+  var cardId = document.getElementById('cardIdInput').value.trim();
+  if (!name || !cardId) { alert('姓名和卡号不能为空！'); return; }
+
+  var res = await sb.from('members').insert([{ name: name, card_id: cardId }]);
+  if (res.error) { alert('添加失败: ' + res.error.message); return; }
+
+  document.getElementById('memberMsg').innerHTML = '✅ 已添加：' + name + '（卡号 ' + cardId + '）';
+  document.getElementById('nameInput').value = '';
+  document.getElementById('cardIdInput').value = '';
+  loadMembers();
+}
+
+// ========== 删除成员 ==========
+async function delMember(id) {
+  var res = await sb.from('members').delete().eq('id', id);
+  if (res.error) { alert('删除失败: ' + res.error.message); return; }
+  loadMembers();
+}
+
+// ========== 加载成员列表 ==========
+async function loadMembers() {
+  var res = await sb.from('members').select('*').order('id', { ascending: false });
+  if (res.error) { alert('加载成员失败: ' + res.error.message); return; }
+  var html = '';
+  for (var i = 0; i < res.data.length; i++) {
+    var m = res.data[i];
+    html += '<div class="member-item"><span>👤 ' + m.name + '　卡号：' + m.card_id +
+            '</span><button class="btn-danger" onclick="delMember(' + m.id + ')">删除</button></div>';
+  }
+  document.getElementById('memberList').innerHTML = html || '<div>暂无成员</div>';
+}
+
+// ========== 加载通行记录 ==========
+async function loadLogs() {
+  var res = await sb.from('access_logs').select('*').order('id', { ascending: false }).limit(20);
+  if (res.error) { alert('加载记录失败: ' + res.error.message); return; }
+  var html = '';
+  for (var i = 0; i < res.data.length; i++) {
+    var l = res.data[i];
+    html += '<tr><td>' + new Date(l.created_at).toLocaleString() +
+            '</td><td>' + l.person_name + '</td><td>' + l.card_id +
+            '</td><td>' + l.door + '</td><td>' + (l.is_enter ? '进入' : '离开') +
+            '</td><td>' + (l.granted ? '✅ 放行' : '❌ 拒绝') + '</td></tr>';
+  }
+  document.getElementById('logBody').innerHTML = html || '<tr><td colspan="6">暂无记录</td></tr>';
+}
+
+// ========== 今日统计 ==========
+async function loadStats() {
+  var d = new Date(); d.setHours(0, 0, 0, 0);
+  var start = d.toISOString();
+  var r1 = await sb.from('access_logs').select('id', { count: 'exact', head: true }).gte('created_at', start).eq('granted', true).eq('is_enter', true);
+  var r2 = await sb.from('access_logs').select('id', { count: 'exact', head: true }).gte('created_at', start).eq('granted', true).eq('is_enter', false);
+  var r3 = await sb.from('access_logs').select('id', { count: 'exact', head: true }).gte('created_at', start).eq('granted', false);
+  document.getElementById('stats').innerHTML =
+    '<div class="stat-item">今日进入<div class="stat-num">' + (r1.count || 0) + '</div></div>' +
+    '<div class="stat-item">今日离开<div class="stat-num">' + (r2.count || 0) + '</div></div>' +
+    '<div class="stat-item">今日拒绝<div class="stat-num" style="color:#e05d5d;">' + (r3.count || 0) + '</div></div>';
+}
+
+// ========== 页面打开时自动加载 ==========
+loadMembers();
+loadLogs();
+loadStats();
+</script>
+</body>
+</html>
