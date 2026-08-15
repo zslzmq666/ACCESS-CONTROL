@@ -278,6 +278,19 @@ async function loadStats() {
 loadMembers();
 loadLogs();
 loadStats();
+ // ========== 实时自动刷新 ==========
+sb.channel('access_logs')
+  .on('postgres_changes', {
+    event: 'INSERT',
+    schema: 'public',
+    table: 'access_logs'
+  }, function() {
+    // 有新刷卡记录时，自动刷新表格和统计
+    loadLogs();
+    loadStats();
+  })
+  .subscribe();
+// ====================================
 </script>
 </body>
 </html>
